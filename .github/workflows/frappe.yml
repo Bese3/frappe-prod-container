@@ -57,6 +57,11 @@ jobs:
           echo "FRONTEND_PORT=$FRONTEND_PORT" >> .env
           echo "WAIT_TIMEOUT=$WAIT_TIMEOUT" >> .env
 
+      - name: Install Docker Compose
+      - run: |
+          sudo apt update
+          sudo apt install docker-compose
+
       - name: Start Frappe services
         run: |
           docker-compose up -d
