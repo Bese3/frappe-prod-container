@@ -3,10 +3,10 @@ name: Deploy and Test Frappe Site
 on:
   push:
     branches:
-      - main
+      - master
   pull_request:
     branches:
-      - main
+      - master
 
 jobs:
   test-frappe:
