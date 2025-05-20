@@ -78,12 +78,17 @@ services:
         done;
         echo "sites/common_site_config.json found";
         bench new-site --mariadb-user-host-login-scope='%' --admin-password=${ADMIN_PASSWORD} --db-root-username=${DB_ROOT_USERNAME} --db-root-password=${DB_ROOT_PASSWORD} --set-default ${SITE_NAME};
+        bench get-app --branch ${APP_BRANCH} ${APP_URL}
+        bench  --site ${SITE_NAME} install-app ${APP_NAME}
 
     environment:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       DB_ROOT_USERNAME: ${DB_ROOT_USERNAME}
       DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
       SITE_NAME: ${SITE_NAME}
+      APP_BRANCH: ${APP_BRANCH}
+      APP_URL: ${APP_URL}
+      APP_NAME: ${APP_NAME}
 
 
   db:
