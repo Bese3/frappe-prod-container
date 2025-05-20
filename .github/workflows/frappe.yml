@@ -58,7 +58,7 @@ jobs:
           echo "WAIT_TIMEOUT=$WAIT_TIMEOUT" >> .env
 
       - name: Install Docker Compose
-      - run: |
+        run: |
           sudo apt update
           sudo apt install docker-compose
 
