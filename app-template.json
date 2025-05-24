@@ -1,0 +1,6 @@
+[
+    {
+    "url": "https://${APP_TOKEN}@github.com/bese3/moj_trial",
+    "branch": "master"
+    }
+]

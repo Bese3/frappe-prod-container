@@ -1,8 +1,8 @@
 version: "3"
 
 services:
-  frappe:
-    image: ${FRAPPE_BENCH_IMAGE}
+  backend:
+    image: ${FRAPPE_IMAGE_NAME}
     networks:
       - frappe_network
     deploy:
@@ -14,40 +14,40 @@ services:
     environment:
       DB_HOST: ${DB_HOST}
       DB_PORT: ${DB_PORT}
-      MYSQL_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
-      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      FRAPPE_IMAGE_NAME: ${FRAPPE_IMAGE_NAME}
+
 
   configurator:
-    image: ${FRAPPE_BENCH_IMAGE}
+    image: ${FRAPPE_IMAGE_NAME}
     networks:
       - frappe_network
     deploy:
       restart_policy:
         condition: none
+    working_dir: /home/frappe/frappe-bench
+    user: root
     entrypoint:
       - bash
       - -c
+      - /home/frappe/scripts/configrator.sh
     command:
-      - >
-        ls -1 apps > sites/apps.txt;
-        bench set-config -g db_host $$DB_HOST;
-        bench set-config -gp db_port $$DB_PORT;
-        bench set-config -g redis_cache "redis://$$REDIS_CACHE";
-        bench set-config -g redis_queue "redis://$$REDIS_QUEUE";
-        bench set-config -g redis_socketio "redis://$$REDIS_QUEUE";
-        bench set-config -gp socketio_port $$SOCKETIO_PORT;
+      - bash
+      - /home/frappe/scripts/configrator.sh
     environment:
       DB_HOST: ${DB_HOST}
       DB_PORT: ${DB_PORT}
-      REDIS_CACHE: ${REDIS_URL}
-      REDIS_QUEUE: ${REDIS_URL}
+      REDIS_CACHE: ${REDIS_CACHE}
+      REDIS_QUEUE: ${REDIS_QUEUE}
       SOCKETIO_PORT: ${SOCKETIO_PORT}
+      FRAPPE_IMAGE_NAME: ${FRAPPE_IMAGE_NAME}
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - logs:/home/frappe/frappe-bench/logs
+      - ./scripts:/home/frappe/scripts
 
   create-site:
-    image: ${FRAPPE_BENCH_IMAGE}
+    image: ${FRAPPE_IMAGE_NAME}
     networks:
       - frappe_network
     deploy:
@@ -56,14 +56,18 @@ services:
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - logs:/home/frappe/frappe-bench/logs
+    user: root
     entrypoint:
       - bash
       - -c
     command:
       - >
-        wait-for-it -t 120 db:3306;
-        wait-for-it -t 120 redis-cache:6379;
-        wait-for-it -t 120 redis-queue:6379;
+        apt update;
+        apt install wait-for-it -y;
+        apt install jq -y;
+        wait-for-it -t 120 ${DB_HOST}:${DB_PORT};
+        wait-for-it -t 120 ${REDIS_CACHE};
+        wait-for-it -t 120 ${REDIS_QUEUE};
         export start=`date +%s`;
         until [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".db_host // empty"` ]] && \
           [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".redis_cache // empty"` ]] && \
@@ -77,28 +81,42 @@ services:
           fi
         done;
         echo "sites/common_site_config.json found";
-        bench new-site --mariadb-user-host-login-scope='%' --admin-password=${ADMIN_PASSWORD} --db-root-username=${DB_ROOT_USERNAME} --db-root-password=${DB_ROOT_PASSWORD} --set-default ${SITE_NAME};
-        bench get-app --branch ${APP_BRANCH} ${APP_URL}
-        bench  --site ${SITE_NAME} install-app ${APP_NAME}
-
+        runuser -u frappe -- bench new-site --mariadb-user-host-login-scope='%' --admin-password=${ADMIN_PASSWORD} --db-root-username=${MYSQL_ROOT_USER} --db-root-password=${MYSQL_ROOT_PASSWORD} --set-default ${FRAPPE_SITE} --force;
+        runuser -u frappe -- bench use ${FRAPPE_SITE};
+        runuser -u frappe -- bench install-app ${FRAPPE_APP_NAME};
+        runuser -u frappe -- bench migrate;
+        runuser -u frappe -- bench build;
+        runuser -u frappe -- bench set-config -g developer_mode 0;
     environment:
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-      DB_ROOT_USERNAME: ${DB_ROOT_USERNAME}
-      DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
-      SITE_NAME: ${SITE_NAME}
-      APP_BRANCH: ${APP_BRANCH}
-      APP_URL: ${APP_URL}
-      APP_NAME: ${APP_NAME}
+        ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+        MYSQL_ROOT_USER: ${MYSQL_ROOT_USER}
+        MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+        FRAPPE_SITE: ${FRAPPE_SITE}
+        DB_HOST: ${DB_HOST}
+        DB_PORT: ${DB_PORT}
+        REDIS_CACHE: ${REDIS_CACHE}
+        REDIS_QUEUE: ${REDIS_QUEUE}
+        FRAPPE_IMAGE_NAME: ${FRAPPE_IMAGE_NAME}
+        FRAPPE_APP_NAME: ${FRAPPE_APP_NAME}
+    depends_on:
+        mariadb:
+          condition: service_healthy
+        redis-cache:
+          condition: service_started
+        redis-queue:
+          condition: service_started
+        configurator:
+          condition: service_completed_successfully
 
 
-  db:
+  mariadb:
     image: mariadb:10.6
     networks:
       - frappe_network
     healthcheck:
-      test: mysqladmin ping -h localhost --password=admin
-      interval: 1s
-      retries: 20
+      test: mysqladmin ping -h localhost --password=${MYSQL_ROOT_PASSWORD}
+      interval: 3s
+      retries: 10
     deploy:
       restart_policy:
         condition: on-failure
@@ -108,69 +126,44 @@ services:
       - --skip-character-set-client-handshake
       - --skip-innodb-read-only-compressed # Temporary fix for MariaDB 10.6
     environment:
-      MYSQL_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
-      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD} 
     volumes:
       - db-data:/var/lib/mysql
 
   frontend:
-    image: ${FRAPPE_BENCH_IMAGE}
+    image: ${FRAPPE_IMAGE_NAME}
     networks:
       - frappe_network
-    depends_on:
-      - websocket
+    user: root
     deploy:
       restart_policy:
         condition: on-failure
-    # command:
-    #   # - nginx_entrypoint.sh
-    #   - nginx -g 'daemon off;'
+    entrypoint:
+      - bash
+      - -c
+    command:
+       - nginx-entrypoint.sh
     environment:
-      BACKEND: frappe:8000
-      FRAPPE_SITE_NAME_HEADER: frontend
-      SOCKETIO: websocket:9000
+      BACKEND: backend:8000
+      FRAPPE_SITE_NAME_HEADER: ${FRAPPE_SITE}
+      SOCKETIO: websocket:${WEBSERVER_PORT}
       UPSTREAM_REAL_IP_ADDRESS: 127.0.0.1
       UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
       UPSTREAM_REAL_IP_RECURSIVE: "off"
       PROXY_READ_TIMEOUT: 120
       CLIENT_MAX_BODY_SIZE: 50m
+      FRAPPE_IMAGE_NAME: ${FRAPPE_IMAGE_NAME}
+      WEBSERVER_PORT: ${WEBSERVER_PORT}
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - logs:/home/frappe/frappe-bench/logs
     ports:
-      - "8080:8080"
-
-  queue-long:
-    image: ${FRAPPE_BENCH_IMAGE}
-    networks:
-      - frappe_network
-    deploy:
-      restart_policy:
-        condition: on-failure
-    command:
-      - bench
-      - worker
-      - --queue
-      - long,default,short
-    volumes:
-      - sites:/home/frappe/frappe-bench/sites
-      - logs:/home/frappe/frappe-bench/logs
-
-  queue-short:
-    image: ${FRAPPE_BENCH_IMAGE}
-    networks:
-      - frappe_network
-    deploy:
-      restart_policy:
-        condition: on-failure
-    command:
-      - bench
-      - worker
-      - --queue
-      - short,default
-    volumes:
-      - sites:/home/frappe/frappe-bench/sites
-      - logs:/home/frappe/frappe-bench/logs
+      - "${WEBSERVER_PORT}:${WEBSERVER_PORT}"
+    depends_on:
+        create-site:
+          condition: service_completed_successfully
+        websocket:
+          condition: service_started
 
   redis-queue:
     image: redis:6.2-alpine
@@ -191,7 +184,7 @@ services:
         condition: on-failure
 
   scheduler:
-    image: ${FRAPPE_BENCH_IMAGE}
+    image: ${FRAPPE_IMAGE_NAME}
     networks:
       - frappe_network
     deploy:
@@ -203,9 +196,11 @@ services:
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - logs:/home/frappe/frappe-bench/logs
+    environment:
+      FRAPPE_IMAGE_NAME: ${FRAPPE_IMAGE_NAME}
 
   websocket:
-    image: ${FRAPPE_BENCH_IMAGE}
+    image: ${FRAPPE_IMAGE_NAME}
     networks:
       - frappe_network
     deploy:
@@ -217,6 +212,8 @@ services:
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - logs:/home/frappe/frappe-bench/logs
+    environment:
+      FRAPPE_IMAGE_NAME: ${FRAPPE_IMAGE_NAME}
 
 volumes:
   db-data:
@@ -227,3 +224,6 @@ volumes:
 networks:
   frappe_network:
     driver: bridge
+
+
+
